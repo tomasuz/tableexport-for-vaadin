@@ -26,8 +26,9 @@ public abstract class TableExport implements Serializable {
 		this.tableHolder = tableHolder;
 	}
 
-	public TableHolder<?> getTableHolder() {
-		return tableHolder;
+	@SuppressWarnings("unchecked")
+	public <X> TableHolder<X> getTableHolder() {
+		return (TableHolder<X>) tableHolder;
 	}
 
 	public List<String> getColumnIds() {

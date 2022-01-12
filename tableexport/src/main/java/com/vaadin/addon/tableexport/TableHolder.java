@@ -1,8 +1,8 @@
 package com.vaadin.addon.tableexport;
 
 import java.io.Serializable;
-import java.util.Collection;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * @author thomas
@@ -21,16 +21,14 @@ public interface TableHolder<T> extends Serializable {
 
     Object getColumnValue(T item, String columnId);
     
-    Collection<T> getItems();
-
-    int size();
+    Stream<T> getItems();
 
     boolean isHierarchical();
 
     void setHierarchical(final boolean hierarchical);
 
-    Collection<T> getChildren(T rootItem);
+    Stream<T> getChildren(T rootItem);
     
-    Collection<T> getRootItems();
+    Stream<T> getRootItems();
     
 }

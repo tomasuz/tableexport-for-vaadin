@@ -4,13 +4,13 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.BorderStyle;
@@ -85,6 +85,8 @@ public class ExcelExport extends TableExport {
      */
     protected Sheet sheet;
     protected Sheet hierarchicalTotalsSheet = null;
+    /** internal counter of rows added to sheet */
+    protected int sheetLastRowNr = -1;
 
     /**
      * The POI cell creation helper.
@@ -117,7 +119,7 @@ public class ExcelExport extends TableExport {
     // will not be properly identified by the class of the column. In this case, the specified format is
     // used.  However, all other cell stylings will be those of the
     protected Map<String, String> columnExcelFormatMap = new HashMap<>();
-
+    
     /**
      * At minimum, we need a Grid to export. Everything else has default settings.
      *
@@ -267,7 +269,7 @@ public class ExcelExport extends TableExport {
         }
         this.displayTotals = hasTotalsRow;
 
-        this.sheet = this.workbook.createSheet(this.sheetName);
+        this.sheet = createSheet(this.sheetName);
         this.createHelper = this.workbook.getCreationHelper();
         this.dataFormat = this.workbook.createDataFormat();
         this.dateDataFormat = defaultDateDataFormat(this.workbook);
@@ -294,7 +296,7 @@ public class ExcelExport extends TableExport {
 
     public void setNextTableHolder(TableHolder<?> tableHolder, String sheetName) {
         setTableHolder(tableHolder);
-        sheet = workbook.createSheet(WorkbookUtil.createSafeSheetName(sheetName));
+        createSheet(WorkbookUtil.createSafeSheetName(sheetName));
     }
 
     /*
@@ -316,28 +318,26 @@ public class ExcelExport extends TableExport {
      */
     @Override
     public void convertTable() {
-        int startRow;
         // initial setup
         initialSheetSetup();
 
         // add title row
-        startRow = addTitleRow();
-        int row = startRow;
+        addTitleRow();
 
         // add header row
-        addHeaderRow(row);
-        row++;
+        addHeaderRow();
+        int startRow = sheetLastRowNr;
 
         // add data rows
         if (isHierarchical()) {
-            row = addHierarchicalDataRows(sheet, row);
+            addHierarchicalDataRows();
         } else {
-            row = addDataRows(sheet, row);
+            addDataRows();
         }
 
         // add totals row
         if (displayTotals) {
-            addTotalsRow(row, startRow);
+            addTotalsRow(startRow);
         }
 
         // sheet format before export
@@ -401,6 +401,17 @@ public class ExcelExport extends TableExport {
         }
     }
 
+    protected Row appendRow() {
+    	return sheet.createRow(++sheetLastRowNr);
+    }
+
+    protected Sheet createSheet(String sheetName) {
+    	this.sheet = this.workbook.createSheet(sheetName);
+        this.hierarchicalTotalsSheet = null;
+    	this.sheetLastRowNr = -1;
+    	return this.sheet;
+    }
+
     /**
      * Adds the title row. Override this method to change title-related aspects of the workbook.
      * Alternately, the title Row Object is accessible via getTitleRow() after report creation. To
@@ -408,11 +419,11 @@ public class ExcelExport extends TableExport {
      *
      * @return the int
      */
-    protected int addTitleRow() {
+    protected void addTitleRow() {
         if ((null == reportTitle) || ("".equals(reportTitle))) {
-            return 0;
+            return;
         }
-        titleRow = sheet.createRow(0);
+        titleRow = appendRow();
         titleRow.setHeightInPoints(45);
         Cell titleCell;
         CellRangeAddress cra;
@@ -441,7 +452,6 @@ public class ExcelExport extends TableExport {
         if (titleCellStyle.getBorderBottom() != BorderStyle.NONE) {
             RegionUtil.setBorderBottom(titleCellStyle.getBorderBottom(), cra, sheet);
         }
-        return 1;
     }
 
     /**
@@ -449,10 +459,9 @@ public class ExcelExport extends TableExport {
      * workbook. Alternately, the header Row Object is accessible via getHeaderRow() after report
      * creation. To change header CellStyle, though, use setHeaderStyle().
      *
-     * @param row the row
      */
-    protected void addHeaderRow(int row) {
-        headerRow = sheet.createRow(row);
+    protected void addHeaderRow() {
+        headerRow = appendRow();
         Cell headerCell;
         String columnId;
         headerRow.setHeightInPoints(40);
@@ -461,7 +470,7 @@ public class ExcelExport extends TableExport {
             headerCell = headerRow.createCell(col);
             headerCell.setCellValue(createHelper.createRichTextString(getTableHolder().getColumnHeader(columnId)
                     .toString()));
-            headerCell.setCellStyle(getColumnHeaderStyle(row, col));
+            headerCell.setCellStyle(getColumnHeaderStyle(sheetLastRowNr, col));
 
             Short poiAlignment = getTableHolder().getCellAlignment(columnId);
             CellUtil.setAlignment(headerCell, HorizontalAlignment.forInt(poiAlignment));
@@ -492,7 +501,7 @@ public class ExcelExport extends TableExport {
      *
      * @return a collection of the root items
      */
-    protected Collection<?> getRootItems() {
+    protected Stream<?> getRootItems() {
         return getTableHolder().getRootItems();
     }
 
@@ -503,34 +512,22 @@ public class ExcelExport extends TableExport {
      * setDataStyle(). For different data cells to have different CellStyles, override
      * getDataStyle().
      *
-     * @param row the row
-     * @return the int
+     * @param sheetToAddTo
      */
-    protected int addHierarchicalDataRows(Sheet sheetToAddTo, int row) {
-        Collection<?> roots = getRootItems();
-        int localRow = row;
+    protected void addHierarchicalDataRows() {
         /*
          * For Hierarchical Containers, the outlining/grouping in the sheet is with the summary row
          * at the top and the grouped/outlined subcategories below.
          */
         sheet.setRowSumsBelow(false);
-        int count = 0;
-        for (Object rootId : roots) {
-            count = addDataRowRecursively(sheetToAddTo, rootId, localRow);
+        getRootItems().forEachOrdered(rootId -> {
+            addDataRowRecursively(rootId);
             // for totals purposes, we just want to add rootIds which contain totals
             // so we store just the totals in a separate sheet.
             if (displayTotals) {
-                addDataRow(hierarchicalTotalsSheet, rootId, localRow);
+            	setData(hierarchicalTotalsSheet.createRow(sheetLastRowNr), rootId);
             }
-            if (count > 1) {
-                sheet.groupRow(localRow + 1, (localRow + count) - 1);
-                if (collapseRowGroup(rootId)) {
-                	sheet.setRowGroupCollapsed(localRow + 1, true);
-                }
-            }
-            localRow = localRow + count;
-        }
-        return localRow;
+        });
     }
 
     /**
@@ -549,58 +546,50 @@ public class ExcelExport extends TableExport {
      * changes. To change the CellStyle used for all Table data use setDataStyle(). For different
      * data cells to have different CellStyles, override getDataStyle().
      *
-     * @param row the row
-     * @return the int
      */
-    protected int addDataRows(Sheet sheetToAddTo, int row) {
-        Collection<?> items = getTableHolder().getItems();
-        int localRow = row;
-        for (Object item : items) {
-            addDataRow(sheetToAddTo, item, localRow);
-            localRow++;
-        }
-        return localRow;
+    protected void addDataRows() {
+        getTableHolder().getItems().forEachOrdered(item -> addDataRow(item));
     }
 
     /**
      * Used by addHierarchicalDataRows() to implement the recursive calls.
      *
-     * @param rootItem the root item
-     * @param row        the row
-     * @return the int
+     * @param item the (tree node) item
      */
-    protected <X> int addDataRowRecursively(Sheet sheetToAddTo, X rootItem, int row) {
-        int numberAdded = 0;
-        int localRow = row;
-        addDataRow(sheetToAddTo, rootItem, row);
-        numberAdded++;
-        for (X child : ((TableHolder<X>) getTableHolder()).getChildren(rootItem)) {
-            localRow++;
-            numberAdded = numberAdded + addDataRowRecursively(sheetToAddTo, child, localRow);
-        }
-        return numberAdded;
-    }
+	protected <X> void addDataRowRecursively(X item) {
+		addDataRow(item);
+		int rowCount = sheetLastRowNr;
+		getTableHolder().getChildren(item).forEachOrdered(child -> addDataRowRecursively(child));
+		if (sheetLastRowNr > rowCount) {
+			sheet.groupRow(rowCount + 1, sheetLastRowNr);
+			if (collapseRowGroup(item)) {
+				sheet.setRowGroupCollapsed(rowCount + 1, true);
+			}
+		}
+	}
 
     /**
      * This method is ultimately used by either addDataRows() or addHierarchicalDataRows() to
      * actually add the data to the Sheet.
      *
      * @param rootItem the root item id
-     * @param row        the row
      */
-    protected <X> void addDataRow(Sheet sheetToAddTo, X rootItem, int row) {
-        Row sheetRow = sheetToAddTo.createRow(row);
+    protected <X> void addDataRow(X rootItem) {
+    	setData(appendRow(), rootItem);
+    }
+
+    protected <X> void setData(Row row, X rootItem) {
         String columnId;
         Object value;
         Class<?> valueType;
         Cell sheetCell;
-    	TableHolder<X> holder = (TableHolder<X>) getTableHolder();
+    	TableHolder<X> holder = getTableHolder();
         for (int col = 0; col < getColumnIds().size(); col++) {
             columnId = getColumnIds().get(col);
             value = holder.getColumnValue(rootItem, columnId);
             valueType = holder.getColumnType(columnId);
-            sheetCell = sheetRow.createCell(col);
-            setupCell(sheetCell, value, valueType, columnId, row, col);
+            sheetCell = row.createCell(col);
+            setupCell(sheetCell, value, valueType, columnId, sheetLastRowNr, col);
         }
     }
 
@@ -705,17 +694,16 @@ public class ExcelExport extends TableExport {
      * CellStyle used for the totals row, use setFormulaStyle. For different totals cells to have
      * different CellStyles, override getTotalsStyle().
      *
-     * @param currentRow the current row
      * @param startRow   the start row
      */
-    protected void addTotalsRow(int currentRow, int startRow) {
-        totalsRow = sheet.createRow(currentRow);
+    protected void addTotalsRow(int startRow) {
+        totalsRow = appendRow();
         totalsRow.setHeightInPoints(30);
         Cell cell;
         for (int col = 0; col < getColumnIds().size(); col++) {
             String columnId = getColumnIds().get(col);
             cell = totalsRow.createCell(col);
-            setupTotalCell(cell, columnId, currentRow, startRow, col);
+            setupTotalCell(cell, columnId, sheetLastRowNr, startRow, col);
         }
     }
 
@@ -752,6 +740,13 @@ public class ExcelExport extends TableExport {
      * is.
      */
     protected void finalSheetFormat() {
+    	evaluateFormulas();
+        for (int col = 0; col < getColumnIds().size(); col++) {
+            sheet.autoSizeColumn(col);
+        }
+    }
+
+    protected void evaluateFormulas() {
         FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
         if (isHierarchical()) {
             /*
@@ -773,12 +768,9 @@ public class ExcelExport extends TableExport {
             }
         } else {
             evaluator.evaluateAll();
-        }
-        for (int col = 0; col < getColumnIds().size(); col++) {
-            sheet.autoSizeColumn(col);
-        }
+        }    	
     }
-
+    
     /**
      * Returns the default title style. Obtained from: http://svn.apache.org/repos/asf/poi
      * /trunk/src/examples/src/org/apache/poi/ss/examples/TimesheetDemo.java

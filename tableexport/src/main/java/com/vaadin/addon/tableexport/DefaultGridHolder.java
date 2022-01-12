@@ -1,13 +1,14 @@
 package com.vaadin.addon.tableexport;
 
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
 
 import com.vaadin.data.HasHierarchicalDataProvider;
+import com.vaadin.data.provider.HierarchicalDataProvider;
 import com.vaadin.data.provider.HierarchicalQuery;
 import com.vaadin.data.provider.Query;
 import com.vaadin.ui.Grid;
@@ -104,31 +105,30 @@ public class DefaultGridHolder<T> implements TableHolder<T> {
 	}
 
 	@Override
-	public Collection<T> getChildren(T rootItem) {
+	public Stream<T> getChildren(T rootItem) {
 		if (isHierarchical()) {
-			return ((HasHierarchicalDataProvider<T>) heldGrid).getTreeData().getChildren(rootItem);
+			HierarchicalDataProvider<T, ?> dataProvider = (HierarchicalDataProvider<T, ?>) heldGrid.getDataProvider();
+			if (dataProvider.hasChildren(rootItem)) {
+				return dataProvider.fetchChildren(new HierarchicalQuery<>(null, rootItem));
+			}
+			return Collections.<T>emptyList().stream();
 		} else {
-			return Collections.emptyList();
+			return Collections.<T>emptyList().stream();
 		}
 	}
 
 	@Override
-	public Collection<T> getItems() {
+	public Stream<T> getItems() {
 		return heldGrid.getDataProvider()
 				.fetch(new Query<>(0, Integer.MAX_VALUE, heldGrid.getDataCommunicator().getBackEndSorting(),
-						heldGrid.getDataCommunicator().getInMemorySorting(), null))
-				.collect(Collectors.toList());
+						heldGrid.getDataCommunicator().getInMemorySorting(), null));
 	}
 
-    @Override
-    public int size() {
-      return heldGrid.getDataProvider().size(isHierarchical() ? new HierarchicalQuery<>(null, null) : new Query<>());
-    }
-
 	@Override
-	public Collection<T> getRootItems() {
+	public Stream<T> getRootItems() {
 		if (isHierarchical()) {
-			return ((HasHierarchicalDataProvider<T>) heldGrid).getTreeData().getRootItems();
+			HierarchicalDataProvider<T, ?> dataProvider = (HierarchicalDataProvider<T, ?>) heldGrid.getDataProvider();
+			return dataProvider.fetchChildren(new HierarchicalQuery<>(null, null));
 		} else {
 			return getItems();
 		}
